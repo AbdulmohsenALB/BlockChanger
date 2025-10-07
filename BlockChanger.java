@@ -24,8 +24,8 @@ import java.util.stream.Collectors;
 
 /**
  * @author TheGaming999
- * @version 1.8.2
- * @apiNote 1.7 - 1.20.4 easy to use class to take advantage of different
+ * @version 1.9.0
+ * @apiNote 1.7 - 1.21.9 easy to use class to take advantage of different. 1.7 is not fully supported due to significant nms differences between it and the other versions
  * methods
  * that allow you to change blocks at rocket speeds
  * <p>
@@ -3191,4 +3191,5 @@ final class ReflectionUtils {
             }
         }
     }
+
 }
