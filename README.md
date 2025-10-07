@@ -5,7 +5,7 @@
   <a href=""> [![Codacy Badge](https://app.codacy.com/project/badge/Grade/a1ecc2905ea14fd39b29a5a3df2d124c)](https://www.codacy.com/gh/TheGaming999/BlockChanger/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=TheGaming999/BlockChanger&amp;utm_campaign=Badge_Grade)</a>
 
 </div>
-A single class that offers very fast block placement methods from NMS using static final method handles, inheritance, and abstraction, designed to support multiple versions (1.7.10 - 1.20.4) and minimize the overhead of reflection as much as possible. Currently, only the first three methods from the thread below are supported.
+A single class that offers very fast block placement methods from NMS using static final method handles, inheritance, and abstraction, designed to support multiple versions (1.7.10 - 1.21.9) and minimize the overhead of reflection as much as possible. Currently, only the first three methods from the thread below are supported.
   
 Please refer to this thread for more information: (https://www.spigotmc.org/threads/methods-for-changing-massive-amount-of-blocks-up-to-14m-blocks-s.395868/)  
 
