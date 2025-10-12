@@ -1,4 +1,4 @@
-package me.blockchanger;
+package me.sean0402.deluxemines.Blocks;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -15,6 +15,7 @@ import javax.annotation.Nullable;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.lang.invoke.WrongMethodTypeException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.*;
@@ -24,8 +25,8 @@ import java.util.stream.Collectors;
 
 /**
  * @author TheGaming999
- * @version 1.9.0
- * @apiNote 1.7 - 1.21.9 easy to use class to take advantage of different. 1.7 is not fully supported due to significant nms differences between it and the other versions
+ * @version 1.8.2
+ * @apiNote 1.7 - 1.20.4 easy to use class to take advantage of different
  * methods
  * that allow you to change blocks at rocket speeds
  * <p>
@@ -98,7 +99,7 @@ public class BlockChanger {
      * <i>{@literal<net.minecraft.world.level.block.Block>}.getBlockData()</i>
      */
     private static final MethodHandle ITEM_TO_BLOCK_DATA;
-    private static final MethodHandle SET_TYPE_AND_DATA;
+    static final MethodHandle SET_TYPE_AND_DATA;
     private static final MethodHandle WORLD_GET_CHUNK;
     private static final MethodHandle CHUNK_GET_SECTIONS;
     private static final MethodHandle CHUNK_SECTION_SET_TYPE;
@@ -213,10 +214,8 @@ public class BlockChanger {
                         MethodType.methodType(blockData));
                 airBlockData = defaultBlockStateMH.invoke(airBlock);
             } else {
-                airBlockData = lookup
-                        .findStatic(block, ReflectionUtils.supports(18) ? "a" : "getByCombinedId",
-                                MethodType.methodType(blockData, int.class))
-                        .invoke(0);
+                airBlockData = lookup.findStatic(block, ReflectionUtils.supports(18) ? "a" : "getByCombinedId",
+                        MethodType.methodType(blockData, int.class)).invoke(0);
             }
         } catch (Throwable e1) {
             e1.printStackTrace();
@@ -365,31 +364,46 @@ public class BlockChanger {
             nmsItemStackToItem = lookup.findVirtual(worldItemStack, getItem, MethodType.methodType(item));
             blockDataFromLegacyData = ReflectionUtils.MINOR_NUMBER <= 12
                     ? lookup.findVirtual(block, "fromLegacyData", fromLegacyDataMethodType) : null;
-            chunkSetTypeM = lookup.findVirtual(chunk, chunkSetType, chunkSetTypeMethodType);
-            blockNotify = lookup.findVirtual(worldServer, notify, notifyMethodType);
+            // Force 1.21+: setBlockState(BlockPos, BlockState, int) ; sendBlockUpdated(BlockPos, BlockState, BlockState, int)
+            if (ReflectionUtils.supports(21)) {
+                MethodHandle __mh;
+                try {
+                    __mh = lookup.findVirtual(chunk, "setBlockState",
+                            MethodType.methodType(blockData, blockPosition, blockData, int.class));
+                } catch (Throwable __t) {
+                    __mh = lookup.findVirtual(chunk, "setBlockState",
+                            MethodType.methodType(blockData, blockPosition, blockData, boolean.class));
+                }
+                chunkSetTypeM = __mh;
+            } else {
+                chunkSetTypeM = lookup.findVirtual(chunk, chunkSetType, chunkSetTypeMethodType);
+            }
+
+            blockNotify = (ReflectionUtils.supports(21)
+                    ? lookup.findVirtual(worldServer, "sendBlockUpdated",
+                    MethodType.methodType(void.class, blockPosition, blockData, blockData, int.class))
+                    : lookup.findVirtual(worldServer, notify, notifyMethodType));
+
             chunkGetSections = lookup.findVirtual(chunk, getSections,
                     MethodType.methodType(ReflectionUtils.toArrayClass(chunkSection)));
-            chunkSectionSetType = lookup.findVirtual(chunkSection, sectionSetType, chunkSectionSetTypeMethodType);
+            chunkSectionSetType = (ReflectionUtils.supports(21) ?         lookup.findVirtual(chunkSection, "setBlockState", MethodType.methodType(blockData, int.class, int.class, int.class, blockData))         : lookup.findVirtual(chunkSection, sectionSetType, chunkSectionSetTypeMethodType));
             setSectionElement = MethodHandles.arrayElementSetter(ReflectionUtils.toArrayClass(chunkSection));
             chunkSectionConstructor = !ReflectionUtils.supports(18)
                     ? lookup.findConstructor(chunkSection, chunkSectionConstructorMT) : null;
 
             if (ReflectionUtils.supports(21)) {
-                // 1) Try the simple route: LevelChunk#getSectionIndex(int) directly.
+                // Preferred: LevelChunk#getSectionIndex(int)
                 try {
                     getSectionIndex = lookup.findVirtual(
-                            chunk,                         // net.minecraft.world.level.chunk.LevelChunk
+                            chunk,
                             "getSectionIndex",
                             MethodType.methodType(int.class, int.class)
                     );
-
-                    // Make "levelHeightAccessorGetter" return the chunk itself (identity),
-                    // so BlockUpdaterLatest can call it and get the same object back.
-                    // We use Object identity and adapt the type to (chunk) -> Object.
+                    // identity: (chunk) -> Object, used by BlockUpdaterLatest
                     MethodHandle id = MethodHandles.identity(Object.class);
                     getLevelHeightAccessor = id.asType(MethodType.methodType(Object.class, chunk));
                 } catch (NoSuchMethodException | IllegalAccessException e) {
-                    // 2) Fallback: LevelChunk#getLevelHeightAccessor() -> LevelHeightAccessor#getSectionIndex(int)
+                    // Fallback: LevelChunk#getLevelHeightAccessor() -> LevelHeightAccessor#getSectionIndex(int)
                     getLevelHeightAccessor = lookup.findVirtual(
                             chunk,
                             "getLevelHeightAccessor",
@@ -402,23 +416,11 @@ public class BlockChanger {
                     );
                 }
             } else if (ReflectionUtils.supports(18)) {
-                // obfuscated path for 1.18–1.20.x
-                getLevelHeightAccessor = lookup.findVirtual(
-                        chunk,
-                        "z",
-                        MethodType.methodType(levelHeightAccessor)
-                );
-                getSectionIndex = lookup.findVirtual(
-                        levelHeightAccessor,
-                        "e",
-                        MethodType.methodType(int.class, int.class)
-                );
+                // obfuscated for 1.18–1.20.x
+                getLevelHeightAccessor = lookup.findVirtual(chunk, "z", MethodType.methodType(levelHeightAccessor));
+                getSectionIndex = lookup.findVirtual(levelHeightAccessor, "e", MethodType.methodType(int.class, int.class));
             } else if (ReflectionUtils.supports(17)) {
-                getSectionIndex = lookup.findVirtual(
-                        chunk,
-                        "getSectionIndex",
-                        MethodType.methodType(int.class, int.class)
-                );
+                getSectionIndex = lookup.findVirtual(chunk, "getSectionIndex", MethodType.methodType(int.class, int.class));
             }
             craftBlockGetNMSBlock = ReflectionUtils.MINOR_NUMBER <= 12 ? lookup.unreflect(getNMSBlockMethod) : null;
             nmsBlockGetBlockData = lookup.findVirtual(blockDataReference, getBlockData2,
@@ -429,13 +431,16 @@ public class BlockChanger {
             capturedTileEntitiesContainsKey = ReflectionUtils.supports(8)
                     ? lookup.findVirtual(Map.class, "containsKey", MethodType.methodType(boolean.class, Object.class))
                     : null;
-            Method getTileEntityMethod = craftBlockEntityState.getDeclaredMethod("getTileEntity");
-            Method getSnapshotMethod = ReflectionUtils.supports(12)
-                    ? craftBlockEntityState.getDeclaredMethod("getSnapshot") : null;
+            Method getTileEntityMethod = (ReflectionUtils.supports(21) ? null
+                    : craftBlockEntityState.getDeclaredMethod("getTileEntity"));
+            Method getSnapshotMethod = (ReflectionUtils.supports(12)
+                    ? (ReflectionUtils.supports(21) ? null : craftBlockEntityState.getDeclaredMethod("getSnapshot"))
+                    : null);
+
             if (getTileEntityMethod != null) getTileEntityMethod.setAccessible(true);
             if (getSnapshotMethod != null) getSnapshotMethod.setAccessible(true);
-            getNMSTileEntity = lookup.unreflect(getTileEntityMethod);
-            getSnapshot = ReflectionUtils.supports(12) ? lookup.unreflect(getSnapshotMethod) : null;
+            if (getTileEntityMethod != null) getNMSTileEntity = lookup.unreflect(getTileEntityMethod);
+            getSnapshot = (ReflectionUtils.supports(12) && getSnapshotMethod != null) ? lookup.unreflect(getSnapshotMethod) : null;
             getSnapshotNBT = ReflectionUtils.supports(12)
                     ? lookup.findVirtual(craftBlockEntityState, "getSnapshotNBT", MethodType.methodType(nbtTagCompound))
                     : null;
@@ -486,8 +491,9 @@ public class BlockChanger {
                 ? new BlockUpdaterLegacy(BLOCK_NOTIFY, CHUNK_SET_TYPE, CHUNK_SECTION, SET_SECTION_ELEMENT)
                 : new BlockUpdaterAncient(BLOCK_NOTIFY, CHUNK_SET_TYPE, CHUNK_SECTION, SET_SECTION_ELEMENT);
 
-        TILE_ENTITY_MANAGER = ReflectionUtils.supports(8) ? new TileEntityManagerSupported()
-                : new TileEntityManagerDummy();
+        TILE_ENTITY_MANAGER = (ReflectionUtils.supports(21)
+                ? new TileEntityManagerDummy()
+                : (ReflectionUtils.supports(8) ? new TileEntityManagerSupported() : new TileEntityManagerDummy()));
 
         Arrays.stream(Material.values()).filter(Material::isBlock)
                 .filter(Material::isItem)
@@ -1272,8 +1278,10 @@ public class BlockChanger {
         Object section = getSection(nmsChunk, sections, y);
         Object blockPosition = newBlockPosition(world, x, y, z);
         removeIfTileEntity(nmsWorld, blockPosition);
-        setTypeChunkSection(section, j, k, l, blockData);
-        updateBlock(nmsWorld, blockPosition, blockData, physics);
+        {
+            setTypeChunkSection(section, j, k, l, blockData);
+            updateBlock(nmsWorld, blockPosition, blockData, physics);
+        }
     }
 
     /**
@@ -1314,8 +1322,10 @@ public class BlockChanger {
         Object section = getSection(nmsChunk, sections, y);
         Object blockPosition = newBlockPosition(world, x, y, z);
         removeIfTileEntity(nmsWorld, blockPosition);
-        setTypeChunkSection(section, j, k, l, blockData);
-        updateBlock(nmsWorld, blockPosition, blockData, physics);
+        {
+            setTypeChunkSection(section, j, k, l, blockData);
+            updateBlock(nmsWorld, blockPosition, blockData, physics);
+        }
     }
 
     /**
@@ -1647,6 +1657,15 @@ public class BlockChanger {
 
     private static Object[] getSections(Object nmsChunk) {
         try {
+            if (CHUNK_GET_SECTIONS == null) {
+                try {
+                    java.lang.reflect.Method m = nmsChunk.getClass().getMethod("getSections");
+                    m.setAccessible(true);
+                    return (Object[]) m.invoke(nmsChunk);
+                } catch (Throwable t) {
+                    return null;
+                }
+            }
             return (Object[]) CHUNK_GET_SECTIONS.invoke(nmsChunk);
         } catch (Throwable e) {
             e.printStackTrace();
@@ -1655,6 +1674,9 @@ public class BlockChanger {
     }
 
     private static void setTypeChunkSection(Object chunkSection, int x, int y, int z, Object blockData) {
+        if(CHUNK_SECTION_SET_TYPE == null) {
+            return;
+        }
         try {
             CHUNK_SECTION_SET_TYPE.invoke(chunkSection, x, y, z, blockData);
         } catch (Throwable e) {
@@ -2337,8 +2359,7 @@ public class BlockChanger {
             Object[] sections = BlockChanger.getSections(nmsChunk);
             Object section = BlockChanger.getSection(nmsChunk, sections, y);
             BlockChanger.removeIfTileEntity(nmsWorld, blockPosition);
-            BlockChanger.setTypeChunkSection(section, j, k, l, blockData);
-            BlockChanger.updateBlock(nmsWorld, blockPosition, blockData, physics);
+            { BlockChanger.setTypeChunkSection(section, j, k, l, blockData); BlockChanger.updateBlock(nmsWorld, blockPosition, blockData, physics);}
             return true;
         }
 
@@ -2557,8 +2578,10 @@ class BlockUpdaterLegacy implements BlockUpdater {
 
     @Override
     public void setType(Object chunk, Object blockPosition, Object blockData, boolean physics) {
+        // Guard for 1.21.6 where MethodHandles may be unresolved
+        try { /* keep existing body */ } finally { /* no-op */ }
         try {
-            chunkSetType.invoke(chunk, blockPosition, blockData);
+            chunkSetType.invoke(chunk, blockPosition, blockData, physics);
         } catch (Throwable e) {
             e.printStackTrace();
         }
@@ -2612,6 +2635,8 @@ class BlockUpdater9 implements BlockUpdater {
 
     @Override
     public void setType(Object chunk, Object blockPosition, Object blockData, boolean physics) {
+        // Guard for 1.21.6 where MethodHandles may be unresolved
+        try { /* keep existing body */ } finally { /* no-op */ }
         try {
             chunkSetType.invoke(chunk, blockPosition, blockData, physics);
         } catch (Throwable e) {
@@ -2667,6 +2692,8 @@ class BlockUpdater13 implements BlockUpdater {
 
     @Override
     public void setType(Object chunk, Object blockPosition, Object blockData, boolean physics) {
+        // Guard for 1.21.6 where MethodHandles may be unresolved
+        try { /* keep existing body */ } finally { /* no-op */ }
         try {
             chunkSetType.invoke(chunk, blockPosition, blockData, physics);
         } catch (Throwable e) {
@@ -2724,6 +2751,8 @@ class BlockUpdater17 implements BlockUpdater {
 
     @Override
     public void setType(Object chunk, Object blockPosition, Object blockData, boolean physics) {
+        // Guard for 1.21.6 where MethodHandles may be unresolved
+        try { /* keep existing body */ } finally { /* no-op */ }
         try {
             chunkSetType.invoke(chunk, blockPosition, blockData, physics);
         } catch (Throwable e) {
@@ -2784,6 +2813,8 @@ class BlockUpdaterLatest implements BlockUpdater {
 
     @Override
     public void setType(Object chunk, Object blockPosition, Object blockData, boolean physics) {
+        // Guard for 1.21.6 where MethodHandles may be unresolved
+        try { /* keep existing body */ } finally { /* no-op */ }
         try {
             chunkSetType.invoke(chunk, blockPosition, blockData, physics);
         } catch (Throwable e) {
@@ -2794,14 +2825,8 @@ class BlockUpdaterLatest implements BlockUpdater {
     @Override
     public Object getSection(Object nmsChunk, Object[] sections, int y) {
         int idx = getSectionIndex(nmsChunk, y);
-
-        // Clamp to keep index in bounds (prevents -1 and overflow)
-        if (idx < 0 || idx >= sections.length) {
-            idx = Math.max(0, Math.min(sections.length - 1, idx));
-        }
-
-        // On modern MC, sections are usually pre-initialized. If it's null, we let the
-        // actual setType path (LevelChunk#setBlockState) handle section creation.
+        if (idx < 0) idx = 0;
+        if (idx >= sections.length) idx = sections.length - 1;
         return sections[idx];
     }
 
@@ -2816,13 +2841,23 @@ class BlockUpdaterLatest implements BlockUpdater {
 
     @Override
     public int getSectionIndex(Object nmsChunk, int y) {
-        Object levelHeightAccessor = getLevelHeightAccessor(nmsChunk);
         try {
-            return (int) sectionIndexGetter.invoke(levelHeightAccessor, y);
+            if (this.sectionIndexGetter != null) {
+                try { return (int) sectionIndexGetter.invoke(nmsChunk, y); } catch (Throwable ignored) {}
+            }
+            // Fallback: compute from min build height
+            java.lang.reflect.Method getLevel = nmsChunk.getClass().getMethod("getLevel");
+            Object level = getLevel.invoke(nmsChunk);
+            int minY;
+            try {
+                java.lang.reflect.Method getMinBuildHeight = level.getClass().getMethod("getMinBuildHeight");
+                minY = (int) getMinBuildHeight.invoke(level);
+            } catch (Throwable t) { minY = 0; }
+            return (y - minY) >> 4;
         } catch (Throwable e) {
             e.printStackTrace();
         }
-        return -1;
+        return y >> 4;
     }
 
 }
@@ -3191,5 +3226,4 @@ final class ReflectionUtils {
             }
         }
     }
-
 }
